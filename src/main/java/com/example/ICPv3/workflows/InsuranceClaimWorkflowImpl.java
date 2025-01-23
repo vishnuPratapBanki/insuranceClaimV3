@@ -2,110 +2,73 @@ package com.example.ICPv3.workflows;
 
 import com.example.ICPv3.activities.ClaimActivity;
 import com.example.ICPv3.exceptions.NonRetryableClaimException;
-import com.example.ICPv3.models.Claim;
-import com.example.ICPv3.repositories.ClaimRepository;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.workflow.SignalMethod;
 import io.temporal.workflow.Workflow;
-import org.springframework.beans.factory.annotation.Autowired;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 public class InsuranceClaimWorkflowImpl implements InsuranceClaimWorkflow {
 
-    private final ClaimRepository claimRepository;
-    private final ClaimActivity activity;
+    private final RetryOptions retryOptions = RetryOptions.newBuilder()
+            .setInitialInterval(Duration.ofSeconds(1))
+            .setMaximumInterval(Duration.ofSeconds(20))
+            .setBackoffCoefficient(2)
+            .setMaximumAttempts(3)
+            .build();
+
+    private final ActivityOptions activityOptions = ActivityOptions.newBuilder()
+            .setRetryOptions(retryOptions)
+            .setStartToCloseTimeout(Duration.ofSeconds(20))
+            .setScheduleToCloseTimeout(Duration.ofMinutes(5))
+            .build();
+
+    private final ClaimActivity activity = Workflow.newActivityStub(ClaimActivity.class, activityOptions);
+
     private String claimStatus = "Pending";
-
-    // Constructor to inject dependencies explicitly
-    public InsuranceClaimWorkflowImpl(ClaimRepository claimRepository) {
-        this.claimRepository = claimRepository;
-        this.activity = Workflow.newActivityStub(
-                ClaimActivity.class,
-                ActivityOptions.newBuilder()
-                        .setScheduleToCloseTimeout(Duration.ofSeconds(30))
-                        .build());
-    }
-
-    private final RetryOptions retryoptions = RetryOptions.newBuilder()
-            .setInitialInterval(Duration.ofSeconds(1)) // Wait 1 second before first retry
-            .setMaximumInterval(Duration.ofSeconds(20)) // Do not exceed 20 seconds between retries
-            .setBackoffCoefficient(2) // Wait 1 second, then 2, then 4, etc
-            .setMaximumAttempts(3) // Fail after 5000 attempts
-            .build();
-
-    // ActivityOptions specify the limits on how long an Activity can execute before
-    // being interrupted by the Orchestration service
-    private final ActivityOptions defaultActivityOptions = ActivityOptions.newBuilder()
-            .setRetryOptions(retryoptions) // Apply the RetryOptions defined above
-            .setStartToCloseTimeout(Duration.ofSeconds(10)) // Max execution time for single Activity
-            .setScheduleToCloseTimeout(Duration.ofSeconds(5000)) // Entire duration from scheduling to completion including queue time
-            .build();
-
-    private final ClaimActivity activity =
-            Workflow.newActivityStub(ClaimActivity.class,defaultActivityOptions);
-
+    private final List<Runnable> compensationSteps = new ArrayList<>();
 
     @Override
     public void processClaim(String claimId) {
-
-        if (claimRepository == null) {
-            Workflow.getLogger(this.getClass()).error("ClaimRepository is null");
-            throw new RuntimeException("ClaimRepository is not injected");
-        }
-
-        Claim claim = claimRepository.findById(claimId).orElseThrow();
-        List<Runnable> compensationSteps = new ArrayList<>();
+        Workflow.getLogger(this.getClass()).info("Workflow started for Claim ID: " + claimId);
 
         try {
-            activity.validateClaim(claimId);
-            claim.setStatus("Validated");
-            claimRepository.save(claim);
+            // Step 1: Validate Claim
+            activity.validation(claimId);
+            updateStatus("Validated");
+            addCompensationStep(() -> activity.compensateValidation(claimId));
 
-            // Add compensation step for validation
-            compensationSteps.add(() -> activity.compensateValidation(claimId));
+            // Step 2: Detect Fraud
+            activity.fraudDetection(claimId);
+            updateStatus("Fraud Check Passed");
+            addCompensationStep(() -> activity.compensateFraudDetection(claimId));
 
-            activity.detectFraud(claimId);
-            claim.setFraudStatus("Fraud Check Passed");
-            claimRepository.save(claim);
+            // Step 3: Process Approval
+            activity.approval(claimId);
+            updateStatus("Approved");
+            addCompensationStep(() -> activity.compensateApproval(claimId));
 
-            // Add compensation step for fraud detection
-            compensationSteps.add(() -> activity.compensateFraudDetection(claimId));
-
-            activity.processApproval(claimId);
-            claim.setApprovalStatus("Approved");
-            claimRepository.save(claim);
-
-            // Add compensation step for approval
-            compensationSteps.add(() -> activity.compensateApproval(claimId));
-
+            // Step 4: Initiate Payment
             activity.initiatePayment(claimId);
-            claim.setPaymentStatus("Payment Initiated");
-            claimRepository.save(claim);
+            updateStatus("Payment Initiated");
+            addCompensationStep(() -> activity.compensatePayment(claimId));
 
+            Workflow.getLogger(this.getClass()).info("Workflow completed successfully for Claim ID: " + claimId);
         } catch (NonRetryableClaimException e) {
-            claim.setStatus("Rejected");
-            claimRepository.save(claim);
+            updateStatus("Rejected");
             Workflow.getLogger(this.getClass()).info("Claim rejected: " + e.getMessage());
         } catch (Exception e) {
-            claim.setStatus("Failed");
-            claimRepository.save(claim);
-            Workflow.getLogger(this.getClass()).info("Workflow failed, triggering compensation: " + e.getMessage());
-
-            // Trigger compensation in reverse order
-            for (int i = compensationSteps.size() - 1; i >= 0; i--) {
-                try {
-                    compensationSteps.get(i).run();
-                } catch (Exception ex) {
-                    Workflow.getLogger(this.getClass()).error("Compensation step failed: " + ex.getMessage());
-                }
-            }
+            updateStatus("Failed");
+            Workflow.getLogger(this.getClass()).error("Workflow failed: " + e.getMessage());
+            triggerCompensation();
+            throw Workflow.wrap(e); // Rethrow as non-retryable
         }
     }
 
     @Override
+    @SignalMethod
     public void updateClaimDetails(String claimId, String newStatus) {
         this.claimStatus = newStatus;
         Workflow.getLogger(this.getClass()).info("Claim status updated via signal: " + newStatus);
@@ -114,6 +77,30 @@ public class InsuranceClaimWorkflowImpl implements InsuranceClaimWorkflow {
     @Override
     public String getCurrentClaimStatus() {
         return claimStatus;
+    }
+
+    // Helper method to update workflow status
+    private void updateStatus(String status) {
+        this.claimStatus = status;
+        Workflow.getLogger(this.getClass()).info("Workflow status updated to: " + status);
+    }
+
+    // Add compensation step to the list
+    private void addCompensationStep(Runnable compensationAction) {
+        compensationSteps.add(compensationAction);
+        Workflow.getLogger(this.getClass()).info("Compensation step added.");
+    }
+
+    // Trigger compensation in reverse order
+    private void triggerCompensation() {
+        Workflow.getLogger(this.getClass()).info("Triggering compensation steps...");
+        for (int i = compensationSteps.size() - 1; i >= 0; i--) {
+            try {
+                compensationSteps.get(i).run();
+            } catch (Exception e) {
+                Workflow.getLogger(this.getClass()).error("Compensation step failed: " + e.getMessage());
+            }
+        }
     }
 }
 

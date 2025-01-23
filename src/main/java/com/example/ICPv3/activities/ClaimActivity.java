@@ -7,15 +7,15 @@ import org.springframework.stereotype.Component;
 @Component
 @ActivityInterface
 public interface ClaimActivity {
-    void validateClaim(String claimId) throws NonRetryableClaimException;
+    void validation(String claimId) throws NonRetryableClaimException;
 
-    void detectFraud(String claimId);
+    void fraudDetection(String claimId);
 
-    void processApproval(String claimId);
+    void approval(String claimId);
 
     void initiatePayment(String claimId);
 
-    void compensateClaim(String claimId);
+    void compensatePayment(String claimId);
 
     void compensateValidation(String claimId);
 

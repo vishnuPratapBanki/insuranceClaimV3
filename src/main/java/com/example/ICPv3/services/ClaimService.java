@@ -12,9 +12,9 @@ import org.springframework.stereotype.Service;
 public class ClaimService {
 
     @Autowired
-    private ClaimRepository claimRepository;
+    private  ClaimRepository claimRepository;
     @Autowired
-    private WorkflowClient workflowClient;
+    private  WorkflowClient workflowClient;
 
 
     public String submitClaim(Claim claim) {

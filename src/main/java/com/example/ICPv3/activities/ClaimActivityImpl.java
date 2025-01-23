@@ -13,42 +13,52 @@ public class ClaimActivityImpl implements ClaimActivity {
     @Autowired
     private ClaimRepository claimRepository;
 
-    // Setter for manual failure flag
+    // Failure toggles for testing
     @Setter
-
-    // Flag for manual failure
-    private boolean manualFailure = false;
+    private boolean failValidation = false;
+    @Setter
+    private boolean failFraudDetection = false;
+    @Setter
+    private boolean failApproval = false;
+    @Setter
+    private boolean failPayment = false;
 
     @Override
-    public void validateClaim(String claimId) throws NonRetryableClaimException {
-        Claim claim = claimRepository.findById(claimId)
-                .orElseThrow(() -> new NonRetryableClaimException("Claim not found"));
-        if (!claim.getPolicyHolderName().equalsIgnoreCase("Active")) {
-            throw new NonRetryableClaimException("Policy is inactive");
-        }
+    public void validation(String claimId) {
+        if (failValidation) throw new RuntimeException("Validation failed for testing purposes.");
+
+        Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
+                new IllegalArgumentException("Claim not found with ID: " + claimId)
+        );
+        claim.setStatus("Validated");
+        claimRepository.save(claim);
     }
 
     @Override
-    public void detectFraud(String claimId) {
-        Claim claim = claimRepository.findById(claimId).orElseThrow();
-        if (claim.getClaimType().equalsIgnoreCase("HighRisk")) {
-            throw new RuntimeException("Fraudulent claim detected");
-        }
-    }
+    public void fraudDetection(String claimId) {
+        if (failFraudDetection) throw new RuntimeException("Fraud detection failed for testing purposes.");
 
-    @Override
-    public void processApproval(String claimId) {
-        Claim claim = claimRepository.findById(claimId).orElseThrow();
-        claim.setStatus("Approved");
+        Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
+                new IllegalArgumentException("Claim not found with ID: " + claimId)
+        );
+        try {
+            Thread.sleep(10000); // Simulate processing for 10 seconds
+        } catch (InterruptedException e) {
+            throw new RuntimeException("Task interrupted", e);
+        }
+        claim.setFraudStatus("No Fraud Detected");
         claimRepository.save(claim);
     }
 
     @Override
     public void initiatePayment(String claimId) {
-        Claim claim = claimRepository.findById(claimId).orElseThrow();
+        if (failPayment) throw new RuntimeException("Payment failed for testing purposes.");
 
+        Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
+                new IllegalArgumentException("Claim not found with ID: " + claimId)
+        );
         // Simulate failure based on random probability or manual flag
-        if (manualFailure || Math.random() < 0.3) { // 30% chance of failure
+        if ( Math.random() < 0.3) { // 30% chance of failure
             throw new RuntimeException("Payment initiation failed");
         }
 
@@ -57,25 +67,48 @@ public class ClaimActivityImpl implements ClaimActivity {
     }
 
     @Override
-    public void compensateClaim(String claimId) {
+    public void approval(String claimId) {
+        if (failApproval) throw new RuntimeException("Approval failed for testing purposes.");
+
+        Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
+                new IllegalArgumentException("Claim not found with ID: " + claimId)
+        );
+        claim.setApprovalStatus("Approved");
+        claimRepository.save(claim);
+    }
+
+    @Override
+    public void compensatePayment(String claimId) {
         Claim claim = claimRepository.findById(claimId).orElseThrow();
-        claim.setStatus("Compensation Triggered");
+        claim.setStatus("Payment Compensation Triggered");
         claimRepository.save(claim);
     }
 
     @Override
     public void compensateValidation(String claimId) {
-
+        Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
+                new IllegalArgumentException("Claim not found with ID: " + claimId)
+        );
+        claim.setStatus("Validation Rolled Back");
+        claimRepository.save(claim);
     }
 
     @Override
     public void compensateFraudDetection(String claimId) {
-
+        Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
+                new IllegalArgumentException("Claim not found with ID: " + claimId)
+        );
+        claim.setFraudStatus("Fraud Check Rolled Back");
+        claimRepository.save(claim);
     }
 
     @Override
     public void compensateApproval(String claimId) {
-
+        Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
+                new IllegalArgumentException("Claim not found with ID: " + claimId)
+        );
+        claim.setApprovalStatus("Approval Rolled Back");
+        claimRepository.save(claim);
     }
 
 }
