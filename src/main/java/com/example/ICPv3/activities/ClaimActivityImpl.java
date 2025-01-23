@@ -13,6 +13,10 @@ public class ClaimActivityImpl implements ClaimActivity {
     @Autowired
     private ClaimRepository claimRepository;
 
+    public void setClaimRepository(ClaimRepository claimRepository) {
+        this.claimRepository = claimRepository;
+    }
+
     // Failure toggles for testing
     @Setter
     private boolean failValidation = false;
@@ -22,6 +26,13 @@ public class ClaimActivityImpl implements ClaimActivity {
     private boolean failApproval = false;
     @Setter
     private boolean failPayment = false;
+    @Setter
+    private double failureProbability = 0.3;
+
+    // Method to return a random value (which can be mocked in tests)
+    public double getRandomValue() {
+        return Math.random(); // This is the part you will mock in the test
+    }
 
     @Override
     public void validation(String claimId) {
@@ -57,8 +68,7 @@ public class ClaimActivityImpl implements ClaimActivity {
         Claim claim = claimRepository.findById(claimId).orElseThrow(() ->
                 new IllegalArgumentException("Claim not found with ID: " + claimId)
         );
-        // Simulate failure based on random probability or manual flag
-        if ( Math.random() < 0.3) { // 30% chance of failure
+        if (getRandomValue() < failureProbability) { // 30% chance of failure
             throw new RuntimeException("Payment initiation failed");
         }
 
